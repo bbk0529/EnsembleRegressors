@@ -69,13 +69,14 @@ class EnsembleRegression(Classifier) :
     def validate(self, ts_data, neighbor, station) :
         result = np.array([], dtype='int')
         for i in range(self._n_regressors) : 
-            idx = random.choices(neighbor[station],k=self._n_variables)
+            idx = np.random.choice(neighbor[station], size=self._n_variables, replace=False)
             y = ts_data[station] 
             X = ts_data[idx]
             reg = LinearRegression().fit(X.T, y)
             # print(reg.score(X.T, y))
             original = ts_data[station]
-            predict = reg.intercept_ + np.dot(X.T, reg.coef_)
+            predict = reg.predict(X.T)
+            # predict = reg.intercept_ + np.dot(X.T, reg.coef_)
             ix = np.where(abs(predict - original) > self._eps)    
             result = np.append(result, ix)    
 
@@ -85,6 +86,60 @@ class EnsembleRegression(Classifier) :
         # return [str(station) + '_' + str(k) for k, v in sorted(RESULT.items(), reverse=True, key=lambda item: item[1]) if v>(n_regressors/3*2)]
         return [str(station) + '_' + str(k) for k, v in RESULT.items() if v>(self._n_regressors * self._decision_boundary)]
 
+class EnsembleRegression2(Classifier) :
+    def __init__(self, n_regressors: int, n_variables: int, eps: float, decision_boundary: float) :
+        self._n_regressors = n_regressors
+        self._n_variables = n_variables
+        self._eps = eps
+        self._decision_boundary = decision_boundary
+
+    def validate(self, ts_data, neighbor, station) :
+        result = np.array([], dtype='int')
+        for i in range(self._n_regressors) : 
+            width = ts_data.shape[1]
+            idx_samples = np.unique(np.random.choice(range(width), replace=True, size=width))
+            idx =  np.random.choice(neighbor[station], size=self._n_variables, replace=False)
+            y = ts_data[station][idx_samples]
+            X = ts_data[idx][:, idx_samples]
+            reg = LinearRegression().fit(X.T,y)            
+            original = ts_data[station]
+            predict = reg.predict(ts_data[idx].T)                
+            ix = np.where(abs(predict - original) > self._eps)    
+            result = np.append(result, ix)    
+
+        unique, counts = np.unique(result, return_counts=True)
+        RESULT = dict(zip(unique, counts))
+        # print(RESULT)
+        # return [str(station) + '_' + str(k) for k, v in sorted(RESULT.items(), reverse=True, key=lambda item: item[1]) if v>(n_regressors/3*2)]
+        return [str(station) + '_' + str(k) for k, v in RESULT.items() if v>(self._n_regressors * self._decision_boundary)]
+
+class EnsembleRegressionBootstrap(Classifier) :
+    def __init__(self, n_regressors: int, n_variables: int, eps: float) :
+        self._n_regressors = n_regressors
+        self._n_variables = n_variables
+        self._eps = eps        
+
+    def validate(self, ts_data, neighbor, station) :
+        width = ts_data.shape[1]
+        PRED = np.zeros((self._n_regressors, width))
+        SCORE = np.zeros(self._n_regressors)
+        for j in range(self._n_regressors) : 
+            idx_samples = np.unique(np.random.choice(range(len(ts_data[station])), replace=True, size=40))
+            idx_variables = np.random.choice(range(self._n_variables), replace=False, size=self._n_variables)
+            y = ts_data[station][idx_samples]
+            X = ts_data[neighbor[station]][idx_variables][:, idx_samples]
+            reg = LinearRegression().fit(X.T,y)
+            score = reg.score(X.T, y)
+            pred = reg.predict(ts_data[neighbor[station]][idx_variables].T)            
+            PRED[j] = pred
+            SCORE[j] = score
+        SCORE = SCORE / np.sum(SCORE)
+        predict = np.dot(PRED.T, SCORE)
+        original = ts_data[station]
+        ix = np.where(abs(predict - original) > self._eps)    
+        return [str(station) + '_' + str(idx) for idx in ix[0]]
+
+
 
 class Data(ABC):
     def __init__(self, p_noise):
@@ -92,7 +147,8 @@ class Data(ABC):
         self._flag_noise = False 
         if p_noise :             
             ts_rawdata = copy.deepcopy(self._ts_rawdata)
-            self.ts_data, self.lst_station_timestep, self.lst_noises = self.add_noise(ts_rawdata, p_noise=p_noise, min_noise=1, max_noise=10)
+            # self.ts_data, self.lst_station_timestep, self.lst_noises = self.add_noise(ts_rawdata, p_noise=p_noise, min_noise=1, max_noise=10)
+            self.ts_data, self.lst_station_timestep = self.add_noise3(ts_rawdata, p_noise=p_noise)
         else : 
             self.ts_data = self._ts_rawdata
         
@@ -101,6 +157,38 @@ class Data(ABC):
         #neighbor list
         self._dist_matrix = distance_matrix(metadata, metadata)
         self._neighbor = self._dist_matrix.argsort()[:, 1:k+1]        
+
+
+    def add_noise2(self, ts_data, p_noise: float) :
+        matrix_noises = np.random.rand(ts_data.shape[0], ts_data.shape[1])
+        pick = np.random.choice(np.arange(0, 1, 0.1))
+        idx_null = (matrix_noises > pick + p_noise) | (matrix_noises <= pick)
+        idx_positve = matrix_noises> pick + p_noise/2
+        idx_negative = matrix_noises<= pick + p_noise/2
+        matrix_noises[idx_positve] = 1
+        matrix_noises[idx_negative] = -1        
+        matrix_noises[idx_null] = 0
+        
+        matrix_noises = matrix_noises * np.random.rand(ts_data.shape[0], ts_data.shape[1]) * 5         
+        idx = np.where(abs(matrix_noises)>0)
+        lst_noises ={}
+        return ts_data + matrix_noises, [str(x[0]) + '_' + str(x[1]) for x in np.array(idx).T]
+
+    def add_noise3(self, ts_data, p_noise: float) :
+        n_stations = ts_data.shape[0]
+        n_timesteps = ts_data.shape[1]
+
+        matrix_noises = np.zeros(ts_data.shape)
+        pick_stations = np.random.choice(range(n_stations), size= round(p_noise * n_stations))
+        for s in pick_stations : 
+            pick_timesteps = np.random.choice(range(n_timesteps), size= round(0.05 * n_timesteps), replace=False)
+            matrix_noises[s, pick_timesteps ] = np.random.choice(np.arange(3,5,1)) * np.random.choice([-1,1]) - np.random.randn(len(pick_timesteps)) * 10 
+        idx = np.where(abs(matrix_noises)>0)
+        lst_noises ={}
+        print(pick_stations)
+        return ts_data + matrix_noises, [str(x[0]) + '_' + str(x[1]) for x in np.array(idx).T]
+
+
 
     def add_noise(self, ts_data, p_noise: float, min_noise=1, max_noise=10) :
         n_row = ts_data.shape[0]
@@ -132,7 +220,7 @@ class Tempearture_DWD(Data) :
         df_metadata = pickle.load(open('metadata.p', 'rb'))            
         self._metadata = df_metadata.values[:n_stations]        
         self._ts_rawdata = self._preprocess_data(df.values[:n_stations, :n_timesteps]   )
-        self._k = k  
+        self._k = k          
         super().__init__(p_noise)
 
     def _preprocess_data(self, ts_data: np.ndarray) : 

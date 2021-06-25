@@ -235,7 +235,7 @@ class Data(ABC):
         for s in picked_stations : 
             pick_timesteps = np.random.choice(range(n_timesteps), size= round(p_noise_timesteps * n_timesteps), replace=False)
             # matrix_noises[s, pick_timesteps ] += 5 * np.random.choice([-1,1])
-            matrix_noises[s, pick_timesteps ] = np.random.rand(len(pick_timesteps)) + random.choice(range(5,10)) * np.random.choice([-1,1])
+            matrix_noises[s, pick_timesteps ] = np.random.rand(len(pick_timesteps)) + random.choice(range(3,5)) * np.random.choice([-1,1])
             self.dic_timesteps[s] = pick_timesteps
             # matrix_noises[s, pick_timesteps ] = np.random.choice(np.arange(3,5,1)) * np.random.choice([-1,1]) - np.random.randn(len(pick_timesteps)) * 10 
         idx = np.where(abs(matrix_noises)>0)
@@ -529,10 +529,10 @@ def regression_based_outlier_detection3(ts_data, neighbor, station, n_regressors
     
 if __name__== '__main__' :
     n_stations = 450
-    n_timesteps = 100
+    n_timesteps = 30
     k = 5
     p_noise_stations = 0.1
-    p_noise_timesteps = 0.20
+    p_noise_timesteps = 0.1
 
     data = Tempearture_DWD(n_stations, n_timesteps, k, p_noise_stations=p_noise_stations, p_noise_timesteps= p_noise_timesteps)
     ensembleregression = EnsembleRegression(n_regressors=5,n_variables=3, eps=2, decision_boundary=0.6, global_search=True)
@@ -540,6 +540,7 @@ if __name__== '__main__' :
     executor = Executor(data, ensembleregression)
     print(data._picked_stations)
     # station = np.random.choice(data._picked_stations)
+    toggle_stations = {}
     toggle = {}
     total_sum = 0 
     for s in data._picked_stations :                 
@@ -548,6 +549,7 @@ if __name__== '__main__' :
             dic[t] = False 
             total_sum += 1
         toggle[s] = dic
+        toggle_stations[s] = False
     
     eps = 5
     lst_false_positive =[]
@@ -561,9 +563,10 @@ if __name__== '__main__' :
         
         for station in range(n_stations) : 
             result = executor._classifier.validate_and_predict(data.ts_data, data._neighbor, station)            
-            if result :                 
-                
+            if result :                                 
+
                 if toggle.get(station) != None : 
+                    toggle_stations[station] = True
                     for r in result[0][0] : 
                         toggle[station][r] = True 
                 else : 
@@ -582,7 +585,9 @@ if __name__== '__main__' :
     s = 0
     for t in toggle : 
         s += sum(toggle[t].values())
-    print(s, total_sum)
+    # print(s, total_sum)
+    print("toggle (Positive):", len([v for k,v in toggle_stations.items() if v==True]))
+    print("toggle (Negative):", len([v for k,v in toggle_stations.items() if v==False]))
     print("false positive", lst_false_positive)
     
 

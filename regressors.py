@@ -21,6 +21,9 @@ class Classifier(ABC):
 
 
 
+
+
+
 class SpatialComparision(Classifier) :
     def validate(self, ts_data: np.ndarray, neighbor: np.ndarray, station: int, n_regressors = None,  n_variables = None, eps = None  ):
         v_col = 'value'
@@ -167,6 +170,65 @@ class EnsembleRegressionBootstrap(Classifier) :
         ix = np.where(abs(predict - original) > self._eps)    
         return [str(station) + '_' + str(idx) for idx in ix[0]]
 
+class SmoothingAndPredict(Classifier):    
+    def correct(self, X, y) : 
+        while True :  
+            reg = LinearRegression().fit(X.T, y)    
+            pred = reg.predict(X.T)
+            error = pred - y 
+            error_mean = np.mean(error)
+            error_std = np.std(error)
+            # idx_boolean = (error >= error_mean +  max(1.5 * error_std) | (error <= error_mean -  1.5 * error_std)
+            idx_boolean = (error >= error_mean +  max(2 * error_std,2)) | (error <= error_mean -  max(2 * error_std,2))
+            idx = np.where(idx_boolean == True )[0]
+            y[idx] = pred[idx] 
+            
+            if len(idx) == 0 :            
+                break
+        return y
+    
+    def validate(self, ts_data, neighbor, station) :               
+        y = copy.deepcopy(ts_data[station])
+        X = copy.deepcopy(ts_data[neighbor[station]])
+        corrected_y = self.correct(X,y)                                    
+        suspected_timesteps = sorted(np.where(abs(ts_data[station] - corrected_y)>3)[0])                   
+        return [str(station) + '_' + str(idx) for idx in suspected_timesteps]
+
+
+
+class RansacRegressor(Classifier) : 
+    def validate (self, ts_data, neighbor, station): 
+        from sklearn.linear_model import RANSACRegressor
+        model = RANSACRegressor()
+        X = ts_data[neighbor[station]]
+        y = ts_data[station]
+        model.fit(X.T, y)
+        suspected_timesteps = sorted(np.where(abs(model.predict(X.T) - y) > 3)[0])
+        return [str(station) + '_' + str(idx) for idx in suspected_timesteps]
+
+
+class HuberRegressor(Classifier) : 
+    def validate (self, ts_data, neighbor, station): 
+        from sklearn.linear_model import HuberRegressor
+        model = HuberRegressor(max_iter=10)
+        X = ts_data[neighbor[station]]
+        y = ts_data[station]
+        model.fit(X.T, y)
+        suspected_timesteps = sorted(np.where(abs(model.predict(X.T) - y) > 3)[0])
+        return [str(station) + '_' + str(idx) for idx in suspected_timesteps]
+
+class TheilSenRegressor(Classifier) : 
+    def validate (self, ts_data, neighbor, station): 
+            from sklearn.linear_model import TheilSenRegressor
+            model = TheilSenRegressor()
+            X = ts_data[neighbor[station]]
+            y = ts_data[station]
+            model.fit(X.T, y)
+            suspected_timesteps = sorted(np.where(abs(model.predict(X.T) - y) > 3)[0])
+            return [str(station) + '_' + str(idx) for idx in suspected_timesteps]
+
+
+
 class EnsembleRegressionCorrector(Classifier) :
     def __init__(self, n_regressors: int, n_variables: int, eps: float) :
         self._n_regressors = n_regressors
@@ -235,7 +297,16 @@ class Data(ABC):
         for s in picked_stations : 
             pick_timesteps = np.random.choice(range(n_timesteps), size= round(p_noise_timesteps * n_timesteps), replace=False)
             # matrix_noises[s, pick_timesteps ] += 5 * np.random.choice([-1,1])
-            matrix_noises[s, pick_timesteps ] = np.random.rand(len(pick_timesteps)) + random.choice(range(3,5)) * np.random.choice([-1,1])
+            # matrix_noises[s, pick_timesteps ] = np.random.rand(len(pick_timesteps)) + random.choice(range(5,10)) * np.random.choice([-1,1])
+            noises = np.append(
+                np.random.rand(round(len(pick_timesteps)/2)) * 30, 
+                - np.random.rand(len(pick_timesteps) - round(len(pick_timesteps)/2)) * 30
+            )
+            # noises = np.random.randn(len(pick_timesteps)) * 5
+            noises[(0 <= noises) & (noises < 3) ] = np.random.choice(range(3,10))
+            noises[(0 >= noises) & (noises > -3) ] = np.random.choice(range(-10,-3))
+            matrix_noises[s, pick_timesteps] = noises
+            
             self.dic_timesteps[s] = pick_timesteps
             # matrix_noises[s, pick_timesteps ] = np.random.choice(np.arange(3,5,1)) * np.random.choice([-1,1]) - np.random.randn(len(pick_timesteps)) * 10 
         idx = np.where(abs(matrix_noises)>0)
@@ -273,8 +344,13 @@ class Tempearture_DWD(Data) :
     def __init__(self, n_stations: int, n_timesteps: int, k: int=5, p_noise_stations: float=0.1, p_noise_timesteps: float=0.1) : 
         df = pickle.load(open('data_dvd_reduced.p','rb'))
         df_metadata = pickle.load(open('metadata.p', 'rb'))            
+        # idx_stations = np.random.choice(range(len(df_metadata)), size=n_stations, replace=False )
+        # idx_rawdata = np.random.choice(range(0, df.shape[1] - n_timesteps))        
+        # self._metadata = df_metadata.values[idx_stations]        
+        # self._ts_rawdata = self._preprocess_data(df.values[idx_stations, idx_rawdata:idx_rawdata+n_timesteps]   )        
+        idx_rawdata = np.random.choice(range(0, df.shape[1] - n_timesteps))        
         self._metadata = df_metadata.values[:n_stations]        
-        self._ts_rawdata = self._preprocess_data(df.values[:n_stations, :n_timesteps]   )
+        self._ts_rawdata = self._preprocess_data(df.values[:n_stations, :n_timesteps])
         self._k = k          
         super().__init__(p_noise_stations, p_noise_timesteps)
 
@@ -524,7 +600,20 @@ def regression_based_outlier_detection3(ts_data, neighbor, station, n_regressors
     ix = np.where(abs(predict - original) > eps)
     return [str(station) + '_' + str(x) for x in ix[0]]
     
-    
+def levenshteinDistance(s1, s2):
+    if len(s1) > len(s2):
+        s1, s2 = s2, s1
+
+    distances = range(len(s1) + 1)
+    for i2, c2 in enumerate(s2):
+        distances_ = [i2+1]
+        for i1, c1 in enumerate(s1):
+            if c1 == c2:
+                distances_.append(distances[i1])
+            else:
+                distances_.append(1 + min((distances[i1], distances[i1 + 1], distances_[-1])))
+        distances = distances_
+    return distances[-1]
     
     
 if __name__== '__main__' :

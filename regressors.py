@@ -1,4 +1,6 @@
+
 from __future__ import annotations
+import time
 import math
 import numpy as np
 import pandas as pd
@@ -171,9 +173,14 @@ class EnsembleRegressionBootstrap(Classifier) :
         return [str(station) + '_' + str(idx) for idx in ix[0]]
 
 class SmoothingAndPredict(Classifier):    
-    def correct(self, X, y) : 
+    def correct(self, X, y, graph=False) : 
+        ymax = max(abs(y))
         while True :  
             reg = LinearRegression().fit(X.T, y)    
+            if graph : 
+                plt.figure(figsize=(20,3))
+                plt.ylim([-ymax, ymax])
+                plt.plot(y)
             pred = reg.predict(X.T)
             error = pred - y 
             error_mean = np.mean(error)
@@ -182,6 +189,10 @@ class SmoothingAndPredict(Classifier):
             idx_boolean = (error >= error_mean +  max(2 * error_std,2)) | (error <= error_mean -  max(2 * error_std,2))
             idx = np.where(idx_boolean == True )[0]
             y[idx] = pred[idx] 
+            if graph : 
+                
+                plt.plot(y)
+                plt.legend(['data_w_noises','corrected'])
             
             if len(idx) == 0 :            
                 break
@@ -257,10 +268,12 @@ class EnsembleRegressionCorrector(Classifier) :
         return [str(station) + '_' + str(idx) for idx in ix[0]]
 
 class Data(ABC):
-    def __init__(self, p_noise_stations, p_noise_timesteps):
+    def __init__(self, p_noise_stations, p_noise_timesteps, min_noises, max_noises):
         self._create_neighor_list(self._metadata[:, 1:], self._k)                        
         ts_rawdata = copy.deepcopy(self._ts_rawdata)        
-        self.ts_data, self.lst_station_timestep = self.add_noise3(ts_rawdata, p_noise_stations=p_noise_stations, p_noise_timesteps = p_noise_timesteps)
+        self.ts_data, self.lst_station_timestep = self.add_noise3(
+            ts_rawdata, p_noise_stations=p_noise_stations, p_noise_timesteps = p_noise_timesteps, min_noises=min_noises, max_noises=max_noises
+        )
         
         
         
@@ -286,7 +299,7 @@ class Data(ABC):
         lst_noises ={}
         return ts_data + matrix_noises, [str(x[0]) + '_' + str(x[1]) for x in np.array(idx).T]
 
-    def add_noise3(self, ts_data, p_noise_stations: float, p_noise_timesteps: float) :
+    def add_noise3(self, ts_data, p_noise_stations: float, p_noise_timesteps: float, min_noises, max_noises) :
         n_stations = ts_data.shape[0]
         n_timesteps = ts_data.shape[1]
         self.dic_timesteps ={}
@@ -299,12 +312,12 @@ class Data(ABC):
             # matrix_noises[s, pick_timesteps ] += 5 * np.random.choice([-1,1])
             # matrix_noises[s, pick_timesteps ] = np.random.rand(len(pick_timesteps)) + random.choice(range(5,10)) * np.random.choice([-1,1])
             noises = np.append(
-                np.random.rand(round(len(pick_timesteps)/2)) * 30, 
-                - np.random.rand(len(pick_timesteps) - round(len(pick_timesteps)/2)) * 30
+                np.random.rand(round(len(pick_timesteps)/2)) * max_noises, 
+                - np.random.rand(len(pick_timesteps) - round(len(pick_timesteps)/2)) * max_noises
             )
             # noises = np.random.randn(len(pick_timesteps)) * 5
-            noises[(0 <= noises) & (noises < 3) ] = np.random.choice(range(3,10))
-            noises[(0 >= noises) & (noises > -3) ] = np.random.choice(range(-10,-3))
+            noises[(0 <= noises) & (noises < min_noises) ] = np.random.choice(range(min_noises,max_noises))
+            noises[(0 >= noises) & (noises > -min_noises) ] = np.random.choice(range(-max_noises, -min_noises))
             matrix_noises[s, pick_timesteps] = noises
             
             self.dic_timesteps[s] = pick_timesteps
@@ -315,6 +328,7 @@ class Data(ABC):
         return ts_data + matrix_noises, [str(x[0]) + '_' + str(x[1]) for x in np.array(idx).T]
 
 
+    
 
     def add_noise(self, ts_data, p_noise: float, min_noise=1, max_noise=10) :
         n_row = ts_data.shape[0]
@@ -341,7 +355,7 @@ class Data(ABC):
 
 
 class Tempearture_DWD(Data) : 
-    def __init__(self, n_stations: int, n_timesteps: int, k: int=5, p_noise_stations: float=0.1, p_noise_timesteps: float=0.1) : 
+    def __init__(self, n_stations: int, n_timesteps: int, k: int=5, p_noise_stations: float=0.1, p_noise_timesteps: float=0.1, min_noises=3, max_noises=10) : 
         df = pickle.load(open('data_dvd_reduced.p','rb'))
         df_metadata = pickle.load(open('metadata.p', 'rb'))            
         # idx_stations = np.random.choice(range(len(df_metadata)), size=n_stations, replace=False )
@@ -352,7 +366,7 @@ class Tempearture_DWD(Data) :
         self._metadata = df_metadata.values[:n_stations]        
         self._ts_rawdata = self._preprocess_data(df.values[:n_stations, :n_timesteps])
         self._k = k          
-        super().__init__(p_noise_stations, p_noise_timesteps)
+        super().__init__(p_noise_stations, p_noise_timesteps, min_noises, max_noises)
 
     def _preprocess_data(self, ts_data: np.ndarray) : 
         df = pd.DataFrame(ts_data)
@@ -496,6 +510,8 @@ class Executor() :
     def evaluate_validator(self) : 
         RESULT = []
         STAT = {'TP': 0, 'TN':0, 'FP':0, 'FN':0 }
+        start = time.time()
+        
         for i in range(len(self._data.ts_data)) :
             result = self.validate(i)
             RESULT = RESULT + result
@@ -508,7 +524,7 @@ class Executor() :
         for a in self._data.lst_station_timestep :
             if a not in RESULT:
                 STAT['FN'] = STAT.get('FN') + 1
-
+        STAT['runtime'] = round(time.time() - start,4)
         lst_suspcted_stations = set([int(station.split('_')[0]) for station in  RESULT])
         
         toggle_lst_stations = {}

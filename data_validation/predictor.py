@@ -1,14 +1,15 @@
-
 from abc import abstractmethod, ABC
 from util import levenshteinDistance
 import copy
 import numpy as np
 from sklearn.linear_model import LinearRegression
-
-
 from data_generator import Data
-class Predictor(ABC) : 
+import matplotlib.pyplot as plt
+from metadata import *
+
+class Predictor(ABC) :     
     pass
+
 class SpatialComparision(Predictor) :
     pass
 
@@ -17,28 +18,17 @@ class EnsembleRegression(Predictor):
 
 
 class SmoothingAndPredict(Predictor):    
-    def predict(self, data: Data) : 
-        ts_data = data.ts_data
-        neighbor = data.neighbor
-        sum_edit_distance = 0
-        for i in range(len(data.ts_data)) : 
-            try : 
-                answer = sorted(data.dic_timesteps[i])
-            except :
-                answer = []
-            y = copy.deepcopy(ts_data[i])
-            X = copy.deepcopy(ts_data[neighbor[i]])
-            corrected_y = self.correct(X,y)                                    
-            suspected_timesteps = sorted(np.where(abs(ts_data[i] - corrected_y)>3)[0])            
-            edit_distance = levenshteinDistance(answer,suspected_timesteps)
-            sum_edit_distance+= edit_distance
-            # print(i, edit_distance)
-        return sum_edit_distance
+    def predict(self, ts_data, neighbor, idx_stations, idx_timesteps, station: int) :                 
+        y = ts_data[station]
+        X = ts_data[neighbor[station]] #position 0 ref to itself
+        corrected_y = self.correct(X,y)        
+        return corrected_y
 
-    def correct(self, X, y) : 
+    def correct(self, X, y_raw) : 
+        y = copy.deepcopy(y_raw)
         while True :  
             reg = LinearRegression().fit(X.T, y)
-    #         print(reg.score(X.T, y))
+            print(reg.score(X.T, y))
             pred = reg.predict(X.T)
             error = pred - y 
             error_mean = np.mean(error)

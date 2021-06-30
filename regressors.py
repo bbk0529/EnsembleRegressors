@@ -363,8 +363,10 @@ class Tempearture_DWD(Data) :
         # self._metadata = df_metadata.values[idx_stations]        
         # self._ts_rawdata = self._preprocess_data(df.values[idx_stations, idx_rawdata:idx_rawdata+n_timesteps]   )        
         idx_rawdata = np.random.choice(range(0, df.shape[1] - n_timesteps))        
+        print(idx_rawdata)
         self._metadata = df_metadata.values[:n_stations]        
-        self._ts_rawdata = self._preprocess_data(df.values[:n_stations, :n_timesteps])
+        
+        self._ts_rawdata = self._preprocess_data(df.values[:n_stations, idx_rawdata:idx_rawdata+n_timesteps])
         self._k = k          
         super().__init__(p_noise_stations, p_noise_timesteps, min_noises, max_noises)
 
